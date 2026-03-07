@@ -215,46 +215,71 @@ def train_models(args):
     expert_model = ExpertModel().to(device)
     rejector = Rejector().to(device)
     
-    # Phase 1: Train local and expert models separately
-    print("\n=== Phase 1: Training Local Model ===")
-    train_classifier(local_model, trainloader, testloader, device,
-                     epochs=args.local_epochs, lr=0.001, name="Local")
-    
-    print("\n=== Phase 2: Training Expert Model ===")
+    # Phase 1: Train expert model separately (cloud server, pre-trained)
+    print("\n=== Phase 1: Training Expert Model (standalone) ===")
     train_classifier(expert_model, trainloader, testloader, device,
                      epochs=args.expert_epochs, lr=0.001, name="Expert")
     
-    # Phase 3: Train rejector with three-logit loss
-    print("\n=== Phase 3: Training Rejector (Three-Logit) ===")
-    local_model.eval()
+    # Phase 2: Joint training of Local Model + Rejector
+    # In standard L2D, expert is fixed; local model and rejector are trained
+    # jointly with the same loss function.
+    print("\n=== Phase 2: Joint Training (Local Model + Rejector) ===")
     expert_model.eval()
     
-    rejector_optimizer = optim.Adam(rejector.parameters(), lr=0.001)
+    # Joint optimizer for both local model and rejector
+    joint_optimizer = optim.Adam(
+        list(local_model.parameters()) + list(rejector.parameters()), lr=0.001
+    )
     loss_fn = ThreeLogitSurrogateLoss(abstain_cost=args.abstain_cost)
+    ce_loss = nn.CrossEntropyLoss()
     
-    for epoch in range(args.rejector_epochs):
+    for epoch in range(args.joint_epochs):
+        local_model.train()
         rejector.train()
         total_loss = 0
-        for images, labels in tqdm(trainloader, desc=f"Rejector Epoch {epoch+1}"):
+        correct, total = 0, 0
+        for images, labels in tqdm(trainloader, desc=f"Joint Epoch {epoch+1}"):
             images, labels = images.to(device), labels.to(device)
             
+            # Forward pass: local model produces predictions
+            local_logits = local_model(images)
+            local_preds = local_logits.argmax(dim=1)
+            
             with torch.no_grad():
-                local_preds = local_model(images).argmax(dim=1)
                 expert_preds = expert_model(images).argmax(dim=1)
             
             # Simulate variable deferral cost
             num_clients = np.random.randint(1, args.max_clients + 1)
             deferral_cost = simulate_deferral_cost(num_clients)
             
-            logits = rejector(images)
-            loss = loss_fn(logits, local_preds, expert_preds, labels, deferral_cost)
+            # Rejector loss (three-logit surrogate)
+            rej_logits = rejector(images)
+            rej_loss = loss_fn(rej_logits, local_preds, expert_preds, labels, deferral_cost)
             
-            rejector_optimizer.zero_grad()
+            # Local model classification loss (standard CE)
+            local_ce = ce_loss(local_logits, labels)
+            
+            # Joint loss: local CE + rejector surrogate
+            loss = local_ce + rej_loss
+            
+            joint_optimizer.zero_grad()
             loss.backward()
-            rejector_optimizer.step()
+            joint_optimizer.step()
+            
             total_loss += loss.item()
+            correct += (local_preds == labels).sum().item()
+            total += labels.size(0)
         
-        print(f"  Epoch {epoch+1} loss: {total_loss / len(trainloader):.4f}")
+        # Test
+        local_model.eval()
+        test_correct, test_total = 0, 0
+        with torch.no_grad():
+            for images, labels in testloader:
+                images, labels = images.to(device), labels.to(device)
+                test_correct += (local_model(images).argmax(1) == labels).sum().item()
+                test_total += labels.size(0)
+        
+        print(f"  Epoch {epoch+1}: loss={total_loss/len(trainloader):.4f} | Local Train {100*correct/total:.1f}% | Test {100*test_correct/test_total:.1f}%")
     
     # Save models
     os.makedirs('checkpoints', exist_ok=True)
@@ -483,9 +508,8 @@ def plot_results(results):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local-epochs', type=int, default=10)
     parser.add_argument('--expert-epochs', type=int, default=15)
-    parser.add_argument('--rejector-epochs', type=int, default=10)
+    parser.add_argument('--joint-epochs', type=int, default=20)
     parser.add_argument('--abstain-cost', type=float, default=0.3)
     parser.add_argument('--max-clients', type=int, default=20)
     args = parser.parse_args()
