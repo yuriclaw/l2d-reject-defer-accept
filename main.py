@@ -102,20 +102,26 @@ class ThreeLogitSurrogateLoss(nn.Module):
         super().__init__()
         self.abstain_cost = abstain_cost
 
-    def forward(self, rejector_logits, local_preds, expert_preds, targets, deferral_cost):
+    def forward(self, rejector_logits, local_logits, expert_preds, targets, deferral_cost):
         """
         Args:
             rejector_logits: (B, 3) - logits for [accept, defer, reject]
-            local_preds: (B,) - predicted labels from local model
-            expert_preds: (B,) - predicted labels from expert model
+            local_logits: (B, K) - RAW logits from local model (differentiable!)
+            expert_preds: (B,) - predicted labels from expert (no grad needed)
             targets: (B,) - true labels
             deferral_cost: scalar or (B,) - variable cost c1(s)
         """
         batch_size = rejector_logits.size(0)
         
-        # Compute per-action costs
-        local_error = (local_preds != targets).float()    # 1{m(x) != y}
-        expert_error = (expert_preds != targets).float()  # 1{e(x) != y}
+        # Local model error: use soft probability (differentiable)
+        # η_m(x) = P(M=Y|X=x), estimated via softmax
+        local_probs = torch.softmax(local_logits, dim=1)
+        # Gather the probability of the true class
+        eta_m = local_probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # (B,)
+        local_error = 1.0 - eta_m  # soft local error, gradients flow to local model
+        
+        # Expert error: hard (expert is frozen, no grad needed)
+        expert_error = (expert_preds != targets).float()
         
         # Cost vector for each sample: [accept_cost, defer_cost, reject_cost]
         costs = torch.stack([
@@ -125,7 +131,7 @@ class ThreeLogitSurrogateLoss(nn.Module):
         ], dim=1)  # (B, 3)
         
         # Surrogate: softmax cross-entropy weighted by costs
-        # We want to minimize expected cost: sum_a P(a|x) * cost(a)
+        # Minimize expected cost: sum_a P(a|x) * cost(a)
         probs = torch.softmax(rejector_logits, dim=1)
         loss = (probs * costs).sum(dim=1).mean()
         
@@ -231,7 +237,6 @@ def train_models(args):
         list(local_model.parameters()) + list(rejector.parameters()), lr=0.001
     )
     loss_fn = ThreeLogitSurrogateLoss(abstain_cost=args.abstain_cost)
-    ce_loss = nn.CrossEntropyLoss()
     
     for epoch in range(args.joint_epochs):
         local_model.train()
@@ -241,9 +246,8 @@ def train_models(args):
         for images, labels in tqdm(trainloader, desc=f"Joint Epoch {epoch+1}"):
             images, labels = images.to(device), labels.to(device)
             
-            # Forward pass: local model produces predictions
+            # Forward pass: local model produces logits (kept in graph!)
             local_logits = local_model(images)
-            local_preds = local_logits.argmax(dim=1)
             
             with torch.no_grad():
                 expert_preds = expert_model(images).argmax(dim=1)
@@ -252,22 +256,17 @@ def train_models(args):
             num_clients = np.random.randint(1, args.max_clients + 1)
             deferral_cost = simulate_deferral_cost(num_clients)
             
-            # Rejector loss (three-logit surrogate)
+            # Single surrogate loss for BOTH local model and rejector
+            # Gradients flow to local model via soft local_error (1 - η_m)
             rej_logits = rejector(images)
-            rej_loss = loss_fn(rej_logits, local_preds, expert_preds, labels, deferral_cost)
-            
-            # Local model classification loss (standard CE)
-            local_ce = ce_loss(local_logits, labels)
-            
-            # Joint loss: local CE + rejector surrogate
-            loss = local_ce + rej_loss
+            loss = loss_fn(rej_logits, local_logits, expert_preds, labels, deferral_cost)
             
             joint_optimizer.zero_grad()
             loss.backward()
             joint_optimizer.step()
             
             total_loss += loss.item()
-            correct += (local_preds == labels).sum().item()
+            correct += (local_logits.argmax(1) == labels).sum().item()
             total += labels.size(0)
         
         # Test
