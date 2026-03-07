@@ -237,6 +237,8 @@ def train_models(args):
         list(local_model.parameters()) + list(rejector.parameters()), lr=0.001
     )
     loss_fn = ThreeLogitSurrogateLoss(abstain_cost=args.abstain_cost)
+    ce_loss = nn.CrossEntropyLoss()
+    alpha = args.ce_weight  # weight for auxiliary CE loss
     
     for epoch in range(args.joint_epochs):
         local_model.train()
@@ -256,10 +258,15 @@ def train_models(args):
             num_clients = np.random.randint(1, args.max_clients + 1)
             deferral_cost = simulate_deferral_cost(num_clients)
             
-            # Single surrogate loss for BOTH local model and rejector
-            # Gradients flow to local model via soft local_error (1 - η_m)
+            # Surrogate loss for system-level optimization
             rej_logits = rejector(images)
-            loss = loss_fn(rej_logits, local_logits, expert_preds, labels, deferral_cost)
+            surr_loss = loss_fn(rej_logits, local_logits, expert_preds, labels, deferral_cost)
+            
+            # Auxiliary CE loss to maintain local model classification ability
+            local_ce = ce_loss(local_logits, labels)
+            
+            # Combined: surrogate (system optimization) + CE (classification baseline)
+            loss = surr_loss + alpha * local_ce
             
             joint_optimizer.zero_grad()
             loss.backward()
@@ -509,6 +516,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--expert-epochs', type=int, default=15)
     parser.add_argument('--joint-epochs', type=int, default=20)
+    parser.add_argument('--ce-weight', type=float, default=0.5,
+                        help='Weight for auxiliary CE loss to maintain local model classification')
     parser.add_argument('--abstain-cost', type=float, default=0.3)
     parser.add_argument('--max-clients', type=int, default=20)
     args = parser.parse_args()
