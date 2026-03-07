@@ -65,7 +65,9 @@ class ExpertModel(nn.Module):
 
 
 class Rejector(nn.Module):
-    """Three-logit rejector: outputs scores for [accept, defer, reject]."""
+    """Three-logit rejector: outputs scores for [accept, defer, reject].
+    Takes system status (deferral cost) as additional input so it can
+    adapt its decision based on current congestion level."""
     def __init__(self, num_classes=10):
         super().__init__()
         self.features = nn.Sequential(
@@ -73,14 +75,17 @@ class Rejector(nn.Module):
             nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
         )
         self.head = nn.Sequential(
-            nn.Linear(64 * 8 * 8, 128), nn.ReLU(),
+            nn.Linear(64 * 8 * 8 + 1, 128), nn.ReLU(),  # +1 for c1(s)
             nn.Linear(128, 3),  # 3 actions
         )
 
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        return self.head(x)
+    def forward(self, x, deferral_cost):
+        feat = self.features(x)
+        feat = feat.view(feat.size(0), -1)
+        # Concatenate deferral cost as a feature
+        c1 = torch.full((feat.size(0), 1), deferral_cost, device=feat.device)
+        feat = torch.cat([feat, c1], dim=1)
+        return self.head(feat)
 
 
 # ============================================================
@@ -164,7 +169,8 @@ class PostHocRejector:
         eta_e = expert_probs.max(dim=1).values   # max expert confidence
         
         c = self.abstain_cost
-        threshold = 1 - c + deferral_cost
+        # Clamp threshold to avoid rejecting everything when c1 is large
+        threshold = min(1 - c + deferral_cost, 0.95)
         
         actions = torch.full((local_probs.size(0),), 2, dtype=torch.long,
                              device=local_probs.device)  # default: reject
@@ -259,7 +265,7 @@ def train_models(args):
             deferral_cost = simulate_deferral_cost(num_clients)
             
             # Surrogate loss for system-level optimization
-            rej_logits = rejector(images)
+            rej_logits = rejector(images, deferral_cost)
             surr_loss = loss_fn(rej_logits, local_logits, expert_preds, labels, deferral_cost)
             
             # Auxiliary CE loss to maintain local model classification ability
@@ -341,9 +347,9 @@ def evaluate(local_model, expert_model, rejector, testloader, device, args):
     for num_clients in [1, 2, 5, 10, 15, 20]:
         deferral_cost = simulate_deferral_cost(num_clients)
         
-        # Method 1: Trained rejector
+        # Method 1: Trained rejector (pass deferral_cost so it adapts to congestion)
         trained_stats = eval_trained_rejector(local_model, expert_model, rejector,
-                                              testloader, device)
+                                              testloader, device, deferral_cost)
         
         # Method 2: Post-hoc threshold adjustment
         posthoc_stats = eval_posthoc(local_model, expert_model, post_hoc,
@@ -372,7 +378,7 @@ def evaluate(local_model, expert_model, rejector, testloader, device, args):
     plot_results(results)
 
 
-def eval_trained_rejector(local_model, expert_model, rejector, testloader, device):
+def eval_trained_rejector(local_model, expert_model, rejector, testloader, device, deferral_cost=0.0):
     correct, total, deferred, rejected = 0, 0, 0, 0
     total_cost = 0
     
@@ -382,7 +388,7 @@ def eval_trained_rejector(local_model, expert_model, rejector, testloader, devic
             
             local_out = local_model(images)
             expert_out = expert_model(images)
-            actions = rejector(images).argmax(dim=1)  # 0=accept, 1=defer, 2=reject
+            actions = rejector(images, deferral_cost).argmax(dim=1)  # 0=accept, 1=defer, 2=reject
             
             for i in range(images.size(0)):
                 if actions[i] == 0:  # Accept local
