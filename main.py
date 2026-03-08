@@ -65,27 +65,28 @@ class ExpertModel(nn.Module):
 
 
 class Rejector(nn.Module):
-    """Three-logit rejector: outputs scores for [accept, defer, reject].
-    Takes system status (deferral cost) as additional input so it can
-    adapt its decision based on current congestion level."""
+    """Three-logit rejector based on local/expert confidence + system status.
+    
+    Input: local model logits (K), expert model logits (K), deferral cost (1)
+    Output: 3 logits for [accept, defer, reject]
+    
+    This is the proper design: the rejector sees HOW confident each model is,
+    plus the current system congestion, to make its routing decision."""
     def __init__(self, num_classes=10):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-        )
-        self.head = nn.Sequential(
-            nn.Linear(64 * 8 * 8 + 1, 128), nn.ReLU(),  # +1 for c1(s)
-            nn.Linear(128, 3),  # 3 actions
+        # Input: local_probs (K) + expert_probs (K) + c1 (1) = 2K+1
+        self.net = nn.Sequential(
+            nn.Linear(2 * num_classes + 1, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 3),  # 3 actions
         )
 
-    def forward(self, x, deferral_cost):
-        feat = self.features(x)
-        feat = feat.view(feat.size(0), -1)
-        # Concatenate deferral cost as a feature
-        c1 = torch.full((feat.size(0), 1), deferral_cost, device=feat.device)
-        feat = torch.cat([feat, c1], dim=1)
-        return self.head(feat)
+    def forward(self, local_logits, expert_logits, deferral_cost):
+        local_probs = torch.softmax(local_logits, dim=1)
+        expert_probs = torch.softmax(expert_logits, dim=1)
+        c1 = torch.full((local_probs.size(0), 1), deferral_cost, device=local_probs.device)
+        features = torch.cat([local_probs, expert_probs, c1], dim=1)
+        return self.net(features)
 
 
 # ============================================================
@@ -268,14 +269,15 @@ def train_models(args):
             local_logits = local_model(images)
             
             with torch.no_grad():
-                expert_preds = expert_model(images).argmax(dim=1)
+                expert_logits = expert_model(images)
+                expert_preds = expert_logits.argmax(dim=1)
             
             # Simulate variable deferral cost
             num_clients = np.random.randint(1, args.max_clients + 1)
             deferral_cost = simulate_deferral_cost(num_clients)
             
-            # Surrogate loss for system-level optimization
-            rej_logits = rejector(images, deferral_cost)
+            # Rejector sees local/expert confidence + system status
+            rej_logits = rejector(local_logits, expert_logits.detach(), deferral_cost)
             surr_loss = loss_fn(rej_logits, local_logits, expert_preds, labels, deferral_cost)
             
             # Auxiliary CE loss to maintain local model classification ability
@@ -398,7 +400,7 @@ def eval_trained_rejector(local_model, expert_model, rejector, testloader, devic
             
             local_out = local_model(images)
             expert_out = expert_model(images)
-            actions = rejector(images, deferral_cost).argmax(dim=1)  # 0=accept, 1=defer, 2=reject
+            actions = rejector(local_out, expert_out, deferral_cost).argmax(dim=1)
             
             for i in range(images.size(0)):
                 if actions[i] == 0:  # Accept local
