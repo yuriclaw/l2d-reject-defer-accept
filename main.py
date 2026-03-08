@@ -109,6 +109,12 @@ class ThreeLogitSurrogateLoss(nn.Module):
 
     def forward(self, rejector_logits, local_logits, expert_preds, targets, deferral_cost):
         """
+        Cost-sensitive cross-entropy surrogate loss.
+        
+        Instead of minimizing E[sum(prob*cost)], we construct per-sample
+        target labels pointing to the BEST action (lowest cost), then use
+        cross-entropy with label smoothing toward the cost-optimal action.
+        
         Args:
             rejector_logits: (B, 3) - logits for [accept, defer, reject]
             local_logits: (B, K) - RAW logits from local model (differentiable!)
@@ -119,28 +125,32 @@ class ThreeLogitSurrogateLoss(nn.Module):
         batch_size = rejector_logits.size(0)
         
         # Local model error: use soft probability (differentiable)
-        # η_m(x) = P(M=Y|X=x), estimated via softmax
         local_probs = torch.softmax(local_logits, dim=1)
-        # Gather the probability of the true class
         eta_m = local_probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # (B,)
-        local_error = 1.0 - eta_m  # soft local error, gradients flow to local model
+        local_cost = 1.0 - eta_m  # soft local error
         
-        # Expert error: hard (expert is frozen, no grad needed)
+        # Expert error: hard (expert is frozen)
         expert_error = (expert_preds != targets).float()
+        defer_cost = expert_error + deferral_cost
         
-        # Cost vector for each sample: [accept_cost, defer_cost, reject_cost]
+        # Cost vector: [accept_cost, defer_cost, reject_cost]
         costs = torch.stack([
-            local_error,
-            expert_error + deferral_cost,
+            local_cost,
+            defer_cost,
             torch.full((batch_size,), self.abstain_cost, device=rejector_logits.device),
         ], dim=1)  # (B, 3)
         
-        # Surrogate: softmax cross-entropy weighted by costs
-        # Minimize expected cost: sum_a P(a|x) * cost(a)
-        probs = torch.softmax(rejector_logits, dim=1)
-        loss = (probs * costs).sum(dim=1).mean()
+        # Find the optimal action (lowest cost) for each sample
+        optimal_actions = costs.detach().argmin(dim=1)  # (B,)
         
-        return loss
+        # Cross-entropy toward the optimal action
+        ce_loss = nn.functional.cross_entropy(rejector_logits, optimal_actions)
+        
+        # Also add soft cost penalty to encourage exploration
+        probs = torch.softmax(rejector_logits, dim=1)
+        soft_cost = (probs * costs.detach()).sum(dim=1).mean()
+        
+        return ce_loss + 0.1 * soft_cost
 
 
 class PostHocRejector:
