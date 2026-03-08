@@ -1,0 +1,128 @@
+{
+  "1": {
+    "deferral_cost": 0.060000000000000005,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8044990219517496,
+      "defer_rate": 0.5001,
+      "reject_rate": 0.0798,
+      "avg_cost": 0.25970000000000004
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.21084199999999997
+    }
+  },
+  "2": {
+    "deferral_cost": 0.11,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8059522511719176,
+      "defer_rate": 0.4987,
+      "reject_rate": 0.0827,
+      "avg_cost": 0.26070000000000004
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.23587699999999995
+    }
+  },
+  "5": {
+    "deferral_cost": 0.26,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8122579931408341,
+      "defer_rate": 0.4923,
+      "reject_rate": 0.0961,
+      "avg_cost": 0.26580000000000004
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.310982
+    }
+  },
+  "10": {
+    "deferral_cost": 0.51,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8432969929315922,
+      "defer_rate": 0.4578,
+      "reject_rate": 0.1653,
+      "avg_cost": 0.29610000000000003
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.43615699999999996
+    }
+  },
+  "15": {
+    "deferral_cost": 0.76,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8432969929315922,
+      "defer_rate": 0.4578,
+      "reject_rate": 0.1653,
+      "avg_cost": 0.29610000000000003
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.5613319999999999
+    }
+  },
+  "20": {
+    "deferral_cost": 1.01,
+    "trained": {
+      "accuracy": 0.7091,
+      "defer_rate": 0.0,
+      "reject_rate": 0.0,
+      "avg_cost": 0.29090000000000005
+    },
+    "posthoc": {
+      "accuracy": 0.8432969929315922,
+      "defer_rate": 0.4578,
+      "reject_rate": 0.1653,
+      "avg_cost": 0.29610000000000003
+    },
+    "baseline": {
+      "accuracy": 0.8192,
+      "defer_rate": 0.5007,
+      "reject_rate": 0.0,
+      "avg_cost": 0.686507
+    }
+  }
+}
